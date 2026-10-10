@@ -20,20 +20,18 @@ function positiveNumber(value, label) {
   return Number(value);
 }
 
-export function openSubtitlesSearchUrl(q, language = "all") {
-  const ids = { ko: "kor", en: "eng", all: "all" };
-  const id = ids[language] || "all";
+export function openSubtitlesSearchUrl(q) {
   const term = encodeURIComponent(q.trim()).replace(/%20/g, "+");
-  return `https://www.opensubtitles.org/ko/search2/moviename-${term}/sublanguageid-${id}`;
+  return `https://www.opensubtitles.org/ko/search2/moviename-${term}/sublanguageid-all`;
 }
 
-function openSubtitlesResult(query, language) {
-  const url = openSubtitlesSearchUrl(query.q, language);
+function openSubtitlesResult(query) {
+  const url = openSubtitlesSearchUrl(query.q);
   return {
     candidates: [{
       provider: "OpenSubtitles.org", title: query.q,
       file_name: "사이트에서 검색 결과 확인", source_url: url, download_url: "",
-      language, season: query.season, episode: query.episode,
+      language: "all", season: query.season, episode: query.episode,
       confidence: "review", creator: "",
       note: "OpenSubtitles.org에서 직접 검색하고, 필요하면 브라우저에서 검증을 완료해 줘",
     }],
@@ -74,7 +72,7 @@ export default {
       } else if (source === "jimaku") {
         result = await searchJimaku(query);
       } else if (source === "opensubtitles") {
-        result = openSubtitlesResult(query, url.searchParams.get("language") || "all");
+        result = openSubtitlesResult(query);
       } else {
         const sourceUrl = url.searchParams.get("url") || "";
         if (!sourceUrl || sourceUrl.length > 2048) throw new Error("원문 링크를 확인해 줘");

@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { openSubtitlesSearchUrl } from "./index.js";
 
-test("OpenSubtitles.org search uses a direct language-filtered link", () => {
-  assert.equal(openSubtitlesSearchUrl("Yosuga no Sora", "ko"),
-    "https://www.opensubtitles.org/ko/search2/moviename-Yosuga+no+Sora/sublanguageid-kor");
+test("OpenSubtitles.org search always includes all languages", () => {
+  assert.equal(openSubtitlesSearchUrl("Yosuga no Sora"),
+    "https://www.opensubtitles.org/ko/search2/moviename-Yosuga+no+Sora/sublanguageid-all");
 });
 
 test("Worker returns OpenSubtitles link without upstream fetch or API key", async () => {
@@ -13,7 +13,8 @@ test("Worker returns OpenSubtitles link without upstream fetch or API key", asyn
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.equal(result.status, "review");
-  assert.match(result.candidates[0].source_url, /sublanguageid-eng$/);
+  assert.match(result.candidates[0].source_url, /sublanguageid-all$/);
+  assert.equal(result.candidates[0].language, "all");
   assert.equal(result.candidates[0].download_url, "");
 });
 

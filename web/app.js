@@ -10,7 +10,7 @@
   const animeList = $("anime-list");
   const candidateSection = $("candidate-section");
   const candidateList = $("candidate-list");
-  const searchButtons = [$("discover-button"), $("title-button"), $("bigfile-button"), $("link-button")];
+  const searchButtons = [$("discover-button"), $("title-button"), $("link-button")];
   let activeRequest = null;
 
   function clean(value) {
@@ -57,8 +57,16 @@
   function requireEnglishTitle() {
     const title = clean(englishInput.value);
     if (title) return title;
-    showNotice("Bigfile, Jimaku, Google 미국 검색에는 영문 또는 로마자 제목을 입력해 주세요.", "error");
+    showNotice("Jimaku와 Google(영어) 검색에는 영문 또는 로마자 제목을 입력해 주세요.", "error");
     englishInput.focus();
+    return "";
+  }
+
+  function requireAnyTitle() {
+    const title = clean(englishInput.value) || clean(titleInput.value);
+    if (title) return title;
+    showNotice("애니 제목 또는 영문 · 로마자 제목을 입력해 주세요.", "error");
+    titleInput.focus();
     return "";
   }
 
@@ -229,22 +237,31 @@
   }
 
   function updateOutboundLinks() {
-    const title = clean(englishInput.value) || clean(titleInput.value);
+    const koreanTitle = clean(titleInput.value);
     const englishTitle = clean(englishInput.value);
-    const language = $("language-select").value;
+    const title = englishTitle || koreanTitle;
     const slug = encodeURIComponent(title).replace(/%20/g, "+");
     $("opensubtitles-link").href = title
-      ? `https://www.opensubtitles.org/ko/search2/moviename-${slug}/sublanguageid-${language}`
+      ? `https://www.opensubtitles.org/ko/search2/moviename-${slug}/sublanguageid-all`
       : "https://www.opensubtitles.org/ko";
-    $("jimaku-direct-link").href = title ? jimakuSearchUrl(title) : "https://jimaku.cc/";
-    $("jimaku-button").href = englishTitle ? jimakuSearchUrl(englishTitle) : "https://jimaku.cc/";
-    const googleParams = new URLSearchParams({
+    $("pdpop-link").href = koreanTitle
+      ? `https://new.pdpop.com/list/ALL?searchKeyword=subject&searchWord=${encodeURIComponent(koreanTitle)}`
+      : "https://new.pdpop.com/list/ALL?searchKeyword=subject";
+    $("jimaku-link").href = englishTitle ? jimakuSearchUrl(englishTitle) : "https://jimaku.cc/";
+    const googleKoParams = new URLSearchParams({
+      q: `${koreanTitle} 자막 배포`,
+      gl: "US",
+      num: "100",
+      newwindow: "1",
+    });
+    $("google-ko-link").href = koreanTitle ? `https://www.google.com/search?${googleKoParams}` : "https://www.google.com";
+    const googleEnParams = new URLSearchParams({
       q: `${englishTitle} subtitle download`,
       gl: "US",
       num: "100",
       newwindow: "1",
     });
-    $("google-link").href = englishTitle ? `https://www.google.com/search?${googleParams}` : "https://www.google.com";
+    $("google-en-link").href = englishTitle ? `https://www.google.com/search?${googleEnParams}` : "https://www.google.com";
   }
 
   function jimakuSearchUrl(title) {
@@ -256,18 +273,11 @@
     const title = requireTitle();
     if (title) searchSubtitles("anissia", title, "애니시아");
   });
-  $("bigfile-button").addEventListener("click", () => {
-    const title = requireEnglishTitle();
-    if (title) searchSubtitles("bigfile", title, "Bigfile");
-  });
-  $("jimaku-button").addEventListener("click", (event) => {
-    const title = requireEnglishTitle();
-    if (!title) { event.preventDefault(); return; }
-    showNotice("Jimaku 검색을 새 탭에서 열었습니다. 사이트에서 일본어 자막을 확인해 주세요.");
-  });
-  $("google-link").addEventListener("click", (event) => {
-    if (!requireEnglishTitle()) event.preventDefault();
-  });
+  $("pdpop-link").addEventListener("click", (event) => { if (!requireTitle()) event.preventDefault(); });
+  $("opensubtitles-link").addEventListener("click", (event) => { if (!requireAnyTitle()) event.preventDefault(); });
+  $("jimaku-link").addEventListener("click", (event) => { if (!requireEnglishTitle()) event.preventDefault(); });
+  $("google-ko-link").addEventListener("click", (event) => { if (!requireTitle()) event.preventDefault(); });
+  $("google-en-link").addEventListener("click", (event) => { if (!requireEnglishTitle()) event.preventDefault(); });
   $("link-button").addEventListener("click", searchManualLink);
   linkInput.addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); searchManualLink(); } });
   $("cancel-button").addEventListener("click", () => {
@@ -276,6 +286,6 @@
     setLoading(false);
     showNotice("검색을 취소했습니다.");
   });
-  for (const input of [titleInput, englishInput, $("language-select")]) input.addEventListener("input", updateOutboundLinks);
+  for (const input of [titleInput, englishInput]) input.addEventListener("input", updateOutboundLinks);
   updateOutboundLinks();
 })();
