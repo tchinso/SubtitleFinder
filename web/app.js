@@ -121,15 +121,35 @@
     $("anime-count").textContent = String(anime.length);
     if (!anime.length) animeList.append(emptyState("검색된 작품이 없습니다. 정확한 제목이라면 ‘입력 제목으로 자막 찾기’를 사용해 보세요."));
     anime.forEach((item, index) => {
-      const button = element("button", "anime-item");
-      button.type = "button";
-      button.append(element("span", "anime-ordinal", String(index + 1).padStart(2, "0")));
+      const row = element("div", "anime-item");
+      const title = clean(item.subject) || "제목 없음";
+      const select = element("button", "anime-select");
+      select.type = "button";
+      select.setAttribute("aria-label", `${title} 자막 후보 찾기`);
+      select.append(element("span", "anime-ordinal", String(index + 1).padStart(2, "0")));
       const names = element("span", "anime-names");
-      names.append(element("span", "anime-title", clean(item.subject) || "제목 없음"));
+      names.append(element("span", "anime-title", title));
       if (clean(item.original_subject)) names.append(element("span", "anime-original", clean(item.original_subject)));
-      button.append(names, element("span", "anime-arrow", "→"));
-      button.addEventListener("click", () => searchSelected(item));
-      animeList.append(button);
+      select.append(names);
+      select.addEventListener("click", () => searchSelected(item));
+      row.append(select);
+
+      const animeNo = Number(item.anime_no ?? item.animeNo);
+      if (Number.isSafeInteger(animeNo) && animeNo > 0) {
+        const page = element("a", "anime-page-link", "애니시아 페이지 ↗");
+        page.href = `https://anissia.net/anime?animeNo=${String(animeNo).padStart(3, "0")}`;
+        page.target = "_blank";
+        page.rel = "noopener noreferrer";
+        page.setAttribute("aria-label", `${title} 애니시아 페이지로 이동`);
+        row.append(page);
+      }
+
+      const arrow = element("button", "anime-arrow", "→");
+      arrow.type = "button";
+      arrow.setAttribute("aria-label", `${title} 자막 후보 찾기`);
+      arrow.addEventListener("click", () => searchSelected(item));
+      row.append(arrow);
+      animeList.append(row);
     });
     const warning = warningsText(data);
     showNotice(`${anime.length ? `작품 ${anime.length}개를 찾았습니다. 작품을 선택해 주세요.` : "검색된 작품이 없습니다."}${warning ? ` ${warning}` : ""}`, data?.status === "error" ? "error" : anime.length ? "success" : "info");
