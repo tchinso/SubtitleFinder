@@ -70,6 +70,7 @@ test('selected Blogger work collects older episodes from public feed', async () 
     JSON.stringify({ calls: fetcher.calls, warnings: all.warnings }));
   assert.ok(all.candidates.every(item => item.provider === 'ReAnime/Blogger'));
   assert.ok(all.candidates.every(item => item.download_url.startsWith('https://drive.google.com/file/d/')));
+  assert.deepEqual(all.sources, []);
   assert.ok(fetcher.calls.every(url => !url.includes('google.com/search')));
 
   const chosen = await searchAnissia({ q: TITLE, animeNo: 3291, episode: 2 }, fetcher);
@@ -77,6 +78,42 @@ test('selected Blogger work collects older episodes from public feed', async () 
   assert.equal(chosen.candidates.length, 1);
   assert.equal(chosen.candidates[0].episode, 2);
   assert.equal(chosen.candidates[0].confidence, 'exact');
+});
+
+test('Anissia searches expose safe creator pages when no subtitle candidate is found', async () => {
+  const blogger = `${BLOG}/2026/09/no-subtitle.html`;
+  const naver = 'https://blog.naver.com/maker';
+  const tistory = 'https://maker.tistory.com/entry/no-subtitle';
+  const bloggerSearch = `${BLOG}/search?${qp(TITLE)}`;
+  const naverSearch = `https://blog.naver.com/PostSearchList.naver?${new URLSearchParams({ blogId: 'maker', SearchText: TITLE })}`;
+  const tistorySearch = `https://maker.tistory.com/search/${encodeURIComponent(TITLE)}`;
+  const fetcher = fakeFetch({
+    [`${API}/anime/caption/animeNo/10`]: { data: [
+      { name: 'Blogger 제작자', website: blogger },
+      { name: '네이버 제작자', website: naver },
+      { name: '티스토리 제작자', website: tistory },
+      { name: '알 수 없는 사이트', website: 'https://other.example/subtitle' },
+    ] },
+    [blogger]: `<meta property="og:title" content="${TITLE} 2화 자막">`,
+    [`${BLOG}/feeds/posts/default?alt=json&max-results=100&${qp(TITLE)}`]: { feed: { entry: [] } },
+    [bloggerSearch]: '<title>검색 결과 없음</title>',
+    [naverSearch]: '<title>검색 결과 없음</title>',
+    [tistory]: `<meta property="og:title" content="${TITLE} 2화 자막">`,
+    [tistorySearch]: new Response('', { status: 403 }),
+  });
+  const found = await searchAnissia({ q: TITLE, animeNo: 10, episode: 2 }, fetcher);
+  assert.equal(found.status, 'error');
+  assert.deepEqual(found.candidates, []);
+  assert.deepEqual(found.sources, [
+    { creator: 'Blogger 제작자', source_url: blogger, search_url: bloggerSearch,
+      note: '지원하는 공개 자막 후보를 찾지 못했습니다. 원문을 확인해 주세요.' },
+    { creator: '네이버 제작자', source_url: naver, search_url: naverSearch,
+      note: '지원하는 공개 자막 후보를 찾지 못했습니다. 원문을 확인해 주세요.' },
+    { creator: '티스토리 제작자', source_url: tistory, search_url: tistorySearch,
+      note: '티스토리 검색: HTTP 403: maker.tistory.com' },
+  ]);
+  assert.ok(found.warnings.some(warning => warning.includes('자동 검색을 지원하지 않는 제작자 주소')));
+  assert.ok(!fetcher.calls.includes('https://other.example/subtitle'));
 });
 
 test('title search resolves an exact Anissia work before reading captions', async () => {

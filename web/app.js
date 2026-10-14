@@ -177,11 +177,14 @@
 
   function showCandidates(data, context) {
     const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+    const sources = Array.isArray(data?.sources) ? data.sources : [];
     candidateList.replaceChildren();
     candidateSection.hidden = false;
     $("candidate-count").textContent = String(candidates.length);
     $("candidate-context").textContent = context;
-    if (!candidates.length) candidateList.append(emptyState("확인된 자막 후보가 없습니다. 출처 사이트에서 직접 검색하거나 다른 제목으로 다시 검색해 보세요."));
+    if (!candidates.length) candidateList.append(emptyState(sources.length
+      ? "확인된 자막 후보가 없습니다. 아래 제작자 원문에서 직접 확인해 보세요."
+      : "확인된 자막 후보가 없습니다. 출처 사이트에서 직접 검색하거나 다른 제목으로 다시 검색해 보세요."));
     candidates.forEach((item) => {
       const card = element("article", "candidate-item");
       card.append(element("div", "candidate-source", clean(item.provider) || "출처"));
@@ -215,6 +218,32 @@
         }
       } else {
         actions.append(element("span", "tag", "원문 링크 없음"));
+      }
+      card.append(actions);
+      candidateList.append(card);
+    });
+    if (!candidates.length) sources.forEach((source) => {
+      const sourceUrl = safeUrl(source.source_url);
+      if (!sourceUrl) return;
+      const card = element("article", "candidate-item");
+      card.append(element("div", "candidate-source", "제작자 원문"));
+      const main = element("div", "candidate-main");
+      main.append(element("h3", "candidate-title", clean(source.creator) || "제작자"));
+      if (clean(source.note)) main.append(element("p", "candidate-note", clean(source.note)));
+      card.append(main);
+      const actions = element("div", "candidate-actions");
+      const link = element("a", "candidate-action", "원문 열기 ↗");
+      link.href = sourceUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      actions.append(link);
+      const searchUrl = safeUrl(source.search_url);
+      if (searchUrl && searchUrl !== sourceUrl) {
+        const search = element("a", "plain-link", "블로그 검색 ↗");
+        search.href = searchUrl;
+        search.target = "_blank";
+        search.rel = "noopener noreferrer";
+        actions.append(search);
       }
       card.append(actions);
       candidateList.append(card);

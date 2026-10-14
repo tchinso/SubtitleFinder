@@ -494,6 +494,29 @@ async function sourceSearch(context, sourceInput, aliases, query, creator) {
   return fromTistory(context, source, aliases, query, creator);
 }
 
+function sourceFallback(website, creator, title, note) {
+  const source = safeUrl(website);
+  const kind = source && blogKind(source);
+  if (!kind) return null;
+  let searchUrl = '';
+  if (kind === 'blogger') {
+    const search = new URL('/search', source.origin);
+    search.searchParams.set('q', title);
+    searchUrl = search.href;
+  } else if (kind === 'tistory') {
+    searchUrl = new URL(`/search/${encodeURIComponent(title)}`, source.origin).href;
+  } else {
+    const blog = source.searchParams.get('blogId') || source.pathname.split('/').filter(Boolean)[0];
+    if (/^[\w-]+$/.test(blog || '')) {
+      const search = new URL('https://blog.naver.com/PostSearchList.naver');
+      search.searchParams.set('blogId', blog);
+      search.searchParams.set('SearchText', title);
+      searchUrl = search.href;
+    }
+  }
+  return { creator, source_url: source.href, search_url: searchUrl, note };
+}
+
 export async function searchAnissia(input, fetcher = fetch) {
   let query;
   try { query = sanitizeQuery(input || {}); }
@@ -501,6 +524,7 @@ export async function searchAnissia(input, fetcher = fetch) {
   const context = new RequestContext(fetcher);
   const candidates = [];
   const warnings = [];
+  const sources = [];
   let works = [];
   const requestedId = input?.animeNo ?? input?.anime_no;
   if (requestedId != null && requestedId !== '') {
@@ -545,13 +569,22 @@ export async function searchAnissia(input, fetcher = fetch) {
         const searched = await sourceSearch(context, creator.website, aliases, workQuery, name);
         candidates.push(...searched.found);
         warnings.push(...searched.warnings.map(warning => `${name}: ${warning}`));
-      } catch (error) { warnings.push(`${name}: ${error.message}`); }
+        if (!searched.found.length) {
+          const fallback = sourceFallback(creator.website, name, aliases[0],
+            searched.warnings.join(' / ') || '지원하는 공개 자막 후보를 찾지 못했습니다. 원문을 확인해 주세요.');
+          if (fallback) sources.push(fallback);
+        }
+      } catch (error) {
+        warnings.push(`${name}: ${error.message}`);
+        const fallback = sourceFallback(creator.website, name, aliases[0], error.message);
+        if (fallback) sources.push(fallback);
+      }
       if (context.remaining <= 0) break;
     }
     if (data.data.length > 12) warnings.push('제작자 목록은 작품마다 처음 12명만 확인함');
     if (context.remaining <= 0) break;
   }
-  return result(candidates, warnings);
+  return { ...result(candidates, warnings), sources };
 }
 
 export async function searchDirect(input, fetcher = fetch) {
