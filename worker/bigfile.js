@@ -2,6 +2,38 @@ const PAGE = "https://www.bigfile.co.kr/content/freecaption.php?cateGory=0005";
 const SEARCH = "https://www.bigfile.co.kr/ajax/getContentList.php";
 const FORMATS = /\.(?:srt|smi|sami|vtt|ass|ssa|zip|7z|rar)$/i;
 const MAX_PAGES = 10;
+const MAX_RESPONSE = 2_000_000;
+
+async function boundedBytes(response) {
+  if (Number(response.headers.get("Content-Length")) > MAX_RESPONSE) {
+    await response.body?.cancel();
+    throw new Error("응답 크기 제한 초과");
+  }
+  if (!response.body) return new Uint8Array();
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE) throw new Error("응답 크기 제한 초과");
+      chunks.push(value);
+    }
+  } finally { await reader.cancel().catch(() => {}); }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+  return body;
+}
+
+function checkResponse(response, endpoint) {
+  // These APIs have fixed endpoints. Reject redirects, including same-host
+  // login redirects, instead of following an upstream Location to arbitrary hosts.
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  if (response.url && new URL(response.url).origin !== new URL(endpoint).origin) throw new Error("허용하지 않은 응답 주소");
+}
 
 function directSearchCandidate(query, term) {
   return {
@@ -42,7 +74,7 @@ export function parseBigfileListing(html) {
   }
   const pages = [...pagination.matchAll(/CallCommentList\([^)]*,\s*(\d+)\s*\)/g)]
     .map((match) => Number(match[1]));
-  return { rows, lastPage: Math.max(1, ...pages) };
+  return { rows, lastPage: pages.reduce((last, page) => Number.isFinite(page) ? Math.max(last, page) : last, 1) };
 }
 
 function seasonOf(value) {
@@ -56,26 +88,48 @@ function episodeOf(value) {
   return match ? Number(match[1] || match[2] || match[3]) : null;
 }
 
+function matchesTitle(filename, aliases) {
+  const title = String(filename).normalize("NFKC").replace(FORMATS, "")
+    .replace(/\[[^\]]*\]|\([^)]*\)/g, " ")
+    .replace(/\bS\d{1,2}[ ._-]*E\d{1,3}\b|\b(?:season|시즌)\s*\d{1,2}|\d{1,2}\s*기/gi, " ")
+    .replace(/\b(?:1080p|720p|2160p|480p|BDRip|BluRay|WEBRip|WEB-DL|x26[45]|h26[45]|AAC|FLAC|END|COMPLETE|SUBTITLES?|BD|TV)\b/gi, " ")
+    .replace(/(?:^|[\s._-])(?:EP?|#)\s*\d{1,3}(?:v\d+)?(?:화|話|회)?(?=$|[\s._-])/gi, " ")
+    .replace(/(?:[\s._-])\d{1,3}\s*[~～〜–-]\s*\d{1,3}(?:화|話|회)?[\s._-]*$/i, " ")
+    .replace(/[\s._-]+\d{1,3}(?:v\d+)?(?:화|話|회)?[\s._-]*$/i, " ");
+  return aliases.some(alias => normal(title) === normal(String(alias).replace(/\b(?:season|시즌)\s*\d{1,2}|\d{1,2}\s*기/gi, " ")));
+}
+
+function episodeRange(filename) {
+  const stem = filename.replace(FORMATS, "");
+  const match = /(?:^|[\s._[(])([0-9]{1,3})\s*[~～〜–-]\s*([0-9]{1,3})(?:화|話|회)?(?=$|[\s._\])])/i.exec(stem);
+  return match ? [Number(match[1]), Number(match[2])] : null;
+}
+
 async function searchTerm(query, term, fetcher) {
   const candidates = [];
   const warnings = [];
   const seen = new Set();
+  const requestedSeason = query.season || seasonOf(query.q);
   let lastPage = 1;
   for (let page = 1; page <= Math.min(lastPage, MAX_PAGES); page++) {
     try {
       const body = new URLSearchParams({ pagenum: String(page), cateGory: "0005", searchCaption: term });
       const response = await fetcher(SEARCH, {
         method: "POST",
+        redirect: "manual",
         headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", Referer: PAGE },
         body,
         signal: AbortSignal.timeout(10000),
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      if (Number(response.headers.get("Content-Length")) > 2_000_000) throw new Error("응답 크기 제한 초과");
-      const buffer = await response.arrayBuffer();
-      if (buffer.byteLength > 2_000_000) throw new Error("응답 크기 제한 초과");
-      const charset = /charset\s*=\s*["']?utf-8/i.test(response.headers.get("Content-Type") || "") ? "utf-8" : "euc-kr";
-      const html = new TextDecoder(charset).decode(buffer);
+      checkResponse(response, SEARCH);
+      const buffer = await boundedBytes(response);
+      const contentType = response.headers.get("Content-Type") || "";
+      let html;
+      if (/charset\s*=\s*["']?(?:euc-kr|ks_c_5601|cp949)/i.test(contentType)) html = new TextDecoder("euc-kr").decode(buffer);
+      else {
+        try { html = new TextDecoder("utf-8", { fatal: true }).decode(buffer); }
+        catch { html = new TextDecoder("euc-kr").decode(buffer); }
+      }
       const parsed = parseBigfileListing(html);
       if (page === 1) lastPage = parsed.lastPage;
       let fresh = 0;
@@ -83,14 +137,20 @@ async function searchTerm(query, term, fetcher) {
         if (seen.has(row.id)) continue;
         seen.add(row.id);
         fresh++;
+        if (!matchesTitle(row.file_name, [query.q, term])) continue;
+        const special = /(?:^|[^a-z])(?:OVA|OAD|SPECIAL|NCOP|NCED)(?=$|[^a-z])|특전|외전|특별편/i;
+        if (special.test(row.file_name) && !special.test(query.q)) continue;
         const season = seasonOf(row.file_name);
-        const episode = episodeOf(row.file_name);
-        if (query.season && season && season !== query.season) continue;
+        const range = episodeRange(row.file_name);
+        const episode = range ? null : episodeOf(row.file_name);
+        if (requestedSeason && season && season !== requestedSeason) continue;
         if (query.episode && episode && episode !== query.episode) continue;
+        if (query.episode && range && (query.episode < range[0] || query.episode > range[1])) continue;
         candidates.push({
           provider: "Bigfile", title: query.q, file_name: row.file_name,
           source_url: PAGE, download_url: "", language: "ko", season, episode,
-          confidence: query.episode && episode === query.episode ? "exact" : "review",
+          confidence: query.episode && episode === query.episode && (!requestedSeason || season === requestedSeason)
+            && !/\.(?:zip|7z|rar)$/i.test(row.file_name) ? "exact" : "review",
           creator: "", note: `빅파일에서 '${term}' 검색 · 로그인 후 사이트에서 다운로드`,
         });
       }
@@ -111,19 +171,19 @@ async function searchTerm(query, term, fetcher) {
 
 async function romajiAliases(term, fetcher) {
   const response = await fetcher("https://graphql.anilist.co", {
-    method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+    method: "POST", redirect: "manual", headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({
       query: "query ($search: String!) { Page(perPage: 10) { media(search: $search, type: ANIME) { title { english romaji native } synonyms } } }",
       variables: { search: term },
     }),
     signal: AbortSignal.timeout(8000),
   });
-  if (!response.ok) throw new Error(`AniList HTTP ${response.status}`);
-  const data = await response.json();
+  checkResponse(response, "https://graphql.anilist.co");
+  const data = JSON.parse(new TextDecoder().decode(await boundedBytes(response)));
   const media = data?.data?.Page?.media;
   if (!Array.isArray(media)) return [];
   const exact = media.filter((entry) => {
-    const values = [...Object.values(entry.title || {}), ...(entry.synonyms || [])];
+    const values = [...Object.values(entry?.title || {}), ...(Array.isArray(entry?.synonyms) ? entry.synonyms : [])];
     return values.some((value) => typeof value === "string" && normal(value) === normal(term));
   });
   if (exact.length !== 1 || typeof exact[0]?.title?.romaji !== "string") return [];
@@ -134,7 +194,7 @@ async function romajiAliases(term, fetcher) {
 
 export async function searchBigfile(query, fetcher = fetch) {
   const term = String(query.q || "").trim();
-  if (!/[a-z]/i.test(term)) return { candidates: [], warnings: ["빅파일 검색에는 영문 작품명을 입력해 줘"], status: "error" };
+  if (!/[a-z]/i.test(term) || term.length > 120 || /[\u0000-\u001f]/.test(term)) return { candidates: [], warnings: ["빅파일 검색에는 120자 이하의 영문 작품명을 입력해 줘"], status: "error" };
   const first = await searchTerm(query, term, fetcher);
   if (first.status !== "empty") return first;
   try {

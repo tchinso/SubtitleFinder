@@ -11,6 +11,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 from urllib.parse import parse_qs, unquote_to_bytes, urlencode, urlsplit
 import zipfile
 import zlib
@@ -96,19 +97,139 @@ def _extension(data: bytes, name: str) -> str:
         return ".7z"
     if data.startswith(b"Rar!\x1a\x07"):
         return ".rar"
-    suffix = Path(name).suffix.lower()
-    if suffix in FORMATS:
-        return suffix
-    head = data[:512].decode("utf-8-sig", errors="ignore").lstrip()
-    if head.startswith("WEBVTT"):
-        return ".vtt"
-    if "[Script Info]" in head or "[Events]" in head:
-        return ".ass"
-    if re.search(r"<sami|<sync\b", head, re.I):
-        return ".smi"
-    if re.search(r"\d\d:\d\d:\d\d[,\.]\d+\s*-->", head):
-        return ".srt"
-    raise SourceError("지원 자막/압축 파일인지 확인할 수 없음")
+    return _subtitle_info(data)["extension"]
+
+
+def _subtitle_info(data: bytes, language: str = "ko") -> dict:
+    """Validate actual timed dialogue without converting the original download."""
+    if not data or len(data) > SINGLE_LIMIT:
+        raise SourceError("자막 파일이 비어 있거나 크기 제한을 초과함")
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings = ["utf-16"]
+    else:
+        encodings = []
+        sample = data[:1024]
+        if len(data) % 2 == 0:
+            even, odd = sample[::2].count(0), sample[1::2].count(0)
+            if odd > len(sample) / 5 and even < len(sample) / 20:
+                encodings.append("utf-16le")
+            elif even > len(sample) / 5 and odd < len(sample) / 20:
+                encodings.append("utf-16be")
+        encodings += ["utf-8-sig"] + (["shift_jis", "cp949"] if language == "ja" else ["cp949", "shift_jis"])
+    text, encoding = "", ""
+    for codec in encodings:
+        try:
+            decoded = data.decode(codec)
+            if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", decoded):
+                continue
+            text, encoding = decoded.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n"), codec
+            break
+        except UnicodeError:
+            continue
+    if not text:
+        raise SourceError("지원하는 자막 문자 인코딩으로 읽을 수 없음")
+
+    def clock(value):
+        match = re.fullmatch(r"(?:(\d{1,3}):)?(\d{1,2}):(\d{2})(?:[,.](\d{1,3}))?", value.strip())
+        if not match or int(match[2]) > 59 or int(match[3]) > 59:
+            return None
+        return int(match[1] or 0) * 3600 + int(match[2]) * 60 + int(match[3]) + float("0." + (match[4] or "0"))
+
+    def dialogue(value):
+        value = re.sub(r"\{\\[^}]*\}", "", value)
+        value = re.sub(r"\\[Nnh]", " ", value)
+        value = unescape(re.sub(r"<[^>]*>", " ", value))
+        return any(char.isalnum() for char in value)
+
+    def valid(start, end, body):
+        return start is not None and end is not None and end > start >= 0 and dialogue(body)
+
+    count = 0
+    extension = ""
+    if re.search(r"^\s*\[(?:Script Info|Events)\]\s*$", text, re.I | re.M):
+        extension = ".ass"
+        section, fields = "", []
+        for line in text.splitlines():
+            heading = re.fullmatch(r"\s*\[([^\]]+)\]\s*", line)
+            if heading:
+                section = heading[1].lower()
+            if section != "events":
+                continue
+            if re.match(r"\s*Format\s*:", line, re.I):
+                fields = [value.strip().lower() for value in line.split(":", 1)[1].split(",")]
+            elif re.match(r"\s*Dialogue\s*:", line, re.I) and fields and all(key in fields for key in ("start", "end", "text")) and fields[-1] == "text":
+                parts = line.split(":", 1)[1].split(",", len(fields) - 1)
+                if len(parts) != len(fields):
+                    continue
+                body, drawing = "", False
+                for part in re.split(r"(\{[^}]*\})", parts[-1]):
+                    if part.startswith("{"):
+                        modes = re.findall(r"\\p(\d+)(?=\\|\}|\s|$)", part)
+                        if modes:
+                            drawing = int(modes[-1]) > 0
+                    elif not drawing:
+                        body += part
+                if valid(clock(parts[fields.index("start")]), clock(parts[fields.index("end")]), body):
+                    count += 1
+    elif re.search(r"<sami\b|<sync\b[^>]*\bstart\s*=", text, re.I):
+        extension = ".smi"
+        blocks = list(re.finditer(r"<sync\b[^>]*\bstart\s*=\s*(?:\"(\d+)\"|'(\d+)'|(\d+))[^>]*>([\s\S]*?)(?=<sync\b|</body\b|</sami\b|$)", text, re.I))
+        for index, block in enumerate(blocks):
+            start = int(next(value for value in block.groups()[:3] if value is not None))
+            end = int(next(value for value in blocks[index + 1].groups()[:3] if value is not None)) if index + 1 < len(blocks) else start + 4000
+            if valid(start, end, block[4]):
+                count += 1
+    elif not re.search(r"<(?:!doctype|html|script|form)\b", text[:8192], re.I):
+        extension = ".vtt" if re.match(r"WEBVTT(?:\s|$)", text.lstrip()) else ".srt"
+        for block in re.split(r"\n\s*\n", text):
+            lines = block.strip().splitlines()
+            if not lines or extension == ".vtt" and re.match(r"(?:NOTE|STYLE|REGION)(?:\s|$)", lines[0]):
+                continue
+            for index, line in enumerate(lines[:2]):
+                timing = re.fullmatch(r"\s*(\S+)\s*-->\s*(\S+)(?:\s+.*)?", line)
+                if timing and valid(clock(timing[1]), clock(timing[2]), "\n".join(lines[index + 1:])):
+                    count += 1
+                    break
+    if not count:
+        raise SourceError("유효한 시간 정보와 실제 대사가 있는 자막이 아님")
+    return {"extension": extension, "encoding": encoding, "cue_count": count}
+
+
+def _header(headers: dict[str, str], name: str) -> str:
+    return next((value for key, value in headers.items() if key.lower() == name.lower()), "")
+
+
+def _bounded_command(arguments: list[str], limit: int, timeout: int) -> tuple[int, bytes]:
+    """Stop archive tools while stdout is being read, before a bomb fills RAM."""
+    expired = threading.Event()
+    with subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+        def stop():
+            expired.set()
+            try:
+                process.kill()
+            except OSError:
+                pass
+        timer = threading.Timer(timeout, stop)
+        timer.daemon = True
+        timer.start()
+        body = bytearray()
+        try:
+            while True:
+                chunk = process.stdout.read(min(65536, limit + 1 - len(body)))
+                if not chunk:
+                    break
+                body.extend(chunk)
+                if len(body) > limit:
+                    process.kill()
+                    raise SourceError("7-Zip 출력 크기가 제한을 초과함")
+            code = process.wait()
+            if expired.is_set():
+                raise SourceError("7-Zip 처리 시간 제한을 초과함")
+            return code, bytes(body)
+        finally:
+            timer.cancel()
+            if process.poll() is None:
+                process.kill()
 
 
 def _zip_selection(data: bytes, episode: int | None, allow_special: bool = False,
@@ -157,10 +278,10 @@ def _seven_zip_selection(data: bytes, suffix: str, episode: int | None,
     with tempfile.TemporaryDirectory(prefix="subtitle-archive-") as folder:
         path = Path(folder) / ("source" + suffix)
         path.write_bytes(data)
-        listing = subprocess.run([binary, "l", "-slt", "-bd", "-sccUTF-8", str(path)], capture_output=True, timeout=20)
-        if listing.returncode or len(listing.stdout) > 2 * 1024 * 1024:
+        code, listing = _bounded_command([binary, "l", "-slt", "-bd", "-sccUTF-8", "--", str(path)], 2 * 1024 * 1024, 20)
+        if code:
             raise SourceError("7-Zip 목록을 확인하지 못함")
-        entries = re.split(r"\r?\n\r?\n", listing.stdout.decode("utf-8", errors="replace"))
+        entries = re.split(r"\r?\n\r?\n", listing.decode("utf-8", errors="replace"))
         choices = []
         for entry in entries:
             fields = dict(re.findall(r"^([^\r\n=]+) = ([^\r\n]*)$", entry, re.M))
@@ -185,10 +306,10 @@ def _seven_zip_selection(data: bytes, suffix: str, episode: int | None,
         if len(choices) != 1:
             return None
         name, base = choices[0]
-        run = subprocess.run([binary, "e", "-so", "-y", "-bd", str(path), name], capture_output=True, timeout=30)
-        if run.returncode or len(run.stdout) > SINGLE_LIMIT:
+        code, body = _bounded_command([binary, "e", "-so", "-y", "-bd", "-spd", "--", str(path), name], SINGLE_LIMIT, 30)
+        if code:
             raise SourceError("압축 내부 자막을 읽지 못함")
-        return run.stdout, base
+        return body, base
 
 
 def _disposition_name(headers: dict[str, str]) -> str:
@@ -226,7 +347,7 @@ class Downloader:
             raise SourceError("Drive 파일 주소를 확인할 수 없음")
         address = "https://drive.google.com/uc?" + urlencode({"export": "download", "id": ident})
         response = self.http.get_bytes(address, FILE_LIMIT)
-        if "text/html" in response.headers.get("Content-Type", "").lower():
+        if "text/html" in _header(response.headers, "Content-Type").lower():
             html = response.body.decode("utf-8", errors="replace")
             form = re.search(r'<form\b[^>]*action=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</form>', html, re.I)
             if not form:
@@ -244,7 +365,7 @@ class Downloader:
             if params.get("id") != ident:
                 raise SourceError("Drive 확인 화면의 파일 ID가 다름")
             response = self.http.get_bytes("https://drive.usercontent.google.com/download?" + urlencode(params), FILE_LIMIT)
-            if "text/html" in response.headers.get("Content-Type", "").lower():
+            if "text/html" in _header(response.headers, "Content-Type").lower():
                 raise SourceError("Drive가 파일 대신 HTML 화면을 보냄")
         return response
 
@@ -265,7 +386,7 @@ class Downloader:
                 raise SourceError("다운로드 링크가 허용되지 않음")
             response = (self._drive(candidate.download_url) if drive_id(candidate.download_url)
                         else self.http.get_bytes(candidate.download_url, FILE_LIMIT))
-            content_type = response.headers.get("Content-Type", "").lower()
+            content_type = _header(response.headers, "Content-Type").lower()
             if "text/html" in content_type:
                 raise SourceError("자막 대신 웹페이지를 받음. 원문에서 공개 설정을 확인해 줘")
             data = response.body
@@ -297,6 +418,7 @@ class Downloader:
                 note = "해당 화 자막을 한 개로 확정하지 못해 원본 압축 파일 저장 (7-Zip 설치 시 선택 지원)"
         if len(data) > SINGLE_LIMIT and suffix not in ARCHIVES:
             raise SourceError("자막 파일 크기가 제한을 초과함")
+        subtitle_info = _subtitle_info(data, candidate.language) if suffix not in ARCHIVES else None
         original = safe_name(Path(name.replace("\\", "/")).name)
         base = safe_name(query.title, "Untitled")
         chosen_season = query.season if query.season is not None else (
@@ -319,6 +441,8 @@ class Downloader:
                 "download_url": candidate.download_url, "original_filename": name,
                 "title": query.title, "season": chosen_season, "episode": chosen_episode,
                 "language": candidate.language, "note": note}
+        if subtitle_info:
+            meta.update({key: subtitle_info[key] for key in ("encoding", "cue_count")})
         if candidate.source_episode is not None:
             meta["source_episode"] = candidate.source_episode
         target.with_name(target.name + ".source.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

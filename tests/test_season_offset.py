@@ -85,15 +85,15 @@ class SeasonOffsetTests(unittest.TestCase):
         candidate = ReAnime(http).search_selected(self.query, self.anime).candidates[0]
         stream = BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:
-            archive.writestr("예시 작품 13.srt", b"source episode 13")
-            archive.writestr("예시 작품 14.srt", b"source episode 14")
+            archive.writestr("예시 작품 13.srt", b"1\n00:00:01,000 --> 00:00:02,000\nsource episode 13")
+            archive.writestr("예시 작품 14.srt", b"1\n00:00:01,000 --> 00:00:02,000\nsource episode 14")
         http.binary[http.attachment] = Response(stream.getvalue(), http.attachment, {})
 
         with tempfile.TemporaryDirectory() as folder:
             path, note = Downloader(Path(folder), http).download(candidate, self.query)
             metadata = json.loads(path.with_name(path.name + ".source.json").read_text(encoding="utf-8"))
 
-            self.assertEqual(path.read_bytes(), b"source episode 13")
+            self.assertEqual(path.read_bytes(), b"1\n00:00:01,000 --> 00:00:02,000\nsource episode 13")
             self.assertEqual(note, "")
             self.assertEqual(path.parent.name, "Season 02")
             self.assertTrue(path.name.startswith("S02E01 - "))

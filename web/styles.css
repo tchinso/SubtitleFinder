@@ -43,6 +43,14 @@ h1, h2, h3, p { margin-top: 0; }
 .field input::placeholder { color: #9aa5b4; }
 .field input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(53, 109, 169, .13); }
 .field-hint { padding-top: 8px; color: var(--muted-light); font-size: 12px; }
+.search-options { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 20px; font-size: 12px; color: var(--muted); }
+.search-options label { display: flex; align-items: center; gap: 7px; }
+.search-options input[type="number"] { width: 76px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.file-details { grid-column: 1 / -1; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; overflow-wrap: anywhere; }
+.file-details p { margin-bottom: 8px; }
+.file-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.file-entry span { flex: 1; min-width: 160px; }
+.file-entry button, .file-details > button { padding: 7px 10px; margin: 3px; border: 1px solid var(--line); border-radius: 6px; background: #f2f8fe; color: #235b90; }
 .search-actions { display: flex; flex-wrap: wrap; gap: 9px; margin: 25px 0 29px; }
 .search-actions button, .search-actions a, .candidate-action { min-height: 41px; padding: 9px 15px; border-radius: 8px; font-size: 13px; font-weight: 720; white-space: nowrap; transition: background-color .15s, border-color .15s, transform .15s; }
 .search-actions a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }

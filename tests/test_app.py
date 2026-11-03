@@ -312,12 +312,14 @@ class DownloadTests(unittest.TestCase):
     def test_zip_selects_requested_episode_and_writes_source_metadata(self):
         http = FakeHttp()
         link = "https://blog.kakaocdn.net/download/all.zip"
-        http.binary[link] = Response(zip_bytes({"../S01E01.srt": "first", "folder/S01E02.srt": "second"}), link, {})
+        first = "1\n00:00:01,000 --> 00:00:02,000\nfirst"
+        second = "1\n00:00:01,000 --> 00:00:02,000\nsecond"
+        http.binary[link] = Response(zip_bytes({"../S01E01.srt": first, "folder/S01E02.srt": second}), link, {})
         with tempfile.TemporaryDirectory() as folder:
             target, note = Downloader(Path(folder) / "subtitles", http).download(
                 Candidate("ReAnime/티스토리", "Example", "all.zip", "https://maker.tistory.com/123", link),
                 Query("Example", season=1, episode=2))
-            self.assertEqual(target.read_bytes(), b"second")
+            self.assertEqual(target.read_bytes(), second.encode())
             self.assertEqual(target.parent.name, "Season 01")
             self.assertTrue(target.with_name(target.name + ".source.json").exists())
             self.assertNotIn("..", str(target))

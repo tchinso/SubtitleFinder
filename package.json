@@ -8,9 +8,13 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test:web": "node --test"
+    "test:web": "node --test",
+    "test:live": "node scripts/smoke.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
   }
 }

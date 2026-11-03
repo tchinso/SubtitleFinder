@@ -30,11 +30,17 @@
               <span class="field-hint">Jimaku(주로 일본어 자막), OpenSubtitles, Google(영어) 검색에 사용합니다.</span>
             </label>
           </div>
+          <div class="search-options">
+            <label for="season-input">시즌 <input id="season-input" type="number" min="1" max="99" placeholder="전체" /></label>
+            <label for="episode-input">회차 <input id="episode-input" type="number" min="1" max="999" placeholder="전체" /></label>
+            <label><input id="refresh-input" type="checkbox" /> 저장 결과 대신 새로 검색</label>
+          </div>
           <div class="search-actions" role="group" aria-label="검색 출처 선택">
             <button class="action-primary" id="discover-button" type="submit">
               <span aria-hidden="true">⌕</span> 애니시아 작품 찾기
             </button>
             <button class="action-secondary" id="title-button" type="button">입력 제목으로 자막 찾기</button>
+            <button class="action-secondary" id="jimaku-button" type="button">Jimaku 파일 찾기</button>
             <a class="action-secondary" id="bigfile-link" href="https://www.bigfile.co.kr/content/freecaption.php?cateGory=0005" target="_blank" rel="noopener noreferrer">빅파일</a>
             <a class="action-secondary" id="pdpop-link" href="https://new.pdpop.com/list/ALL?searchKeyword=subject" target="_blank" rel="noopener noreferrer">피디팝</a>
             <a class="action-secondary" id="opensubtitles-link" href="https://www.opensubtitles.org/ko" target="_blank" rel="noopener noreferrer">OpenSubtitles</a>
@@ -46,7 +52,7 @@
             <button class="action-cancel" id="cancel-button" type="button" hidden>검색 취소</button>
           </div>
           <div class="manual-search">
-            <label for="link-input">게시글 · 파일 링크에서 찾기</label>
+            <label for="link-input">게시글 · 파일 · Drive 폴더</label>
             <div class="manual-search-controls">
               <input id="link-input" type="url" placeholder="https://..." inputmode="url" maxlength="2048" />
               <button id="link-button" type="button">링크 확인</button>
