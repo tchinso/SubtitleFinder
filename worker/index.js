@@ -6,6 +6,26 @@ import { downloadSubtitle } from "./download.js";
 
 const SOURCE_NAMES = new Set(["anissia", "bigfile", "jimaku", "opensubtitles", "link"]);
 
+function hasAccessCookie(request) {
+  return (request.headers.get("Cookie") || "").split(";").some(part => {
+    const separator = part.indexOf("=");
+    return separator !== -1
+      && part.slice(0, separator).trim() === "magic_cookie"
+      && part.slice(separator + 1).trim() === "nom_nom_nom";
+  });
+}
+
+function unauthorized() {
+  return new Response("<!doctype html><html><head><title>401 Unauthorized</title></head><body><h1>401 Unauthorized</h1></body></html>", {
+    status: 401,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
 function response(data, status = 200) {
   return Response.json(data, {
     status,
@@ -43,6 +63,7 @@ function openSubtitlesResult(query) {
 
 export default {
   async fetch(request, env) {
+    if (!hasAccessCookie(request)) return unauthorized();
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/api/")) {
       return env.ASSETS ? env.ASSETS.fetch(request) : new Response("Not found", { status: 404 });

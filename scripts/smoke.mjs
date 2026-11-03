@@ -36,7 +36,7 @@ function path(route, params = {}) {
 async function request(route, params = {}, { status = 200, method = 'GET', binary = false, text = false } = {}) {
   return limited(async () => {
     requests++;
-    const response = await fetch(path(route, params), { method, redirect: 'manual', signal: AbortSignal.timeout(90000) });
+    const response = await fetch(path(route, params), { method, headers: { Cookie: 'magic_cookie=nom_nom_nom' }, redirect: 'manual', signal: AbortSignal.timeout(90000) });
     assert.equal(response.status, status, `${method} ${route}: expected HTTP ${status}, received ${response.status}`);
     const limit = binary ? 6 * 1024 * 1024 : 3 * 1024 * 1024;
     assert.ok(Number(response.headers.get('content-length') || 0) <= limit, `${route}: response exceeds size limit`);
